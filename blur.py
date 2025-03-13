@@ -1,33 +1,61 @@
 import cv2
-import glob
+import numpy as np
 import os
+import logging
 import shutil
-import argparse
+from ultralytics import YOLO
+import glob
 
-THRESHOLD=30
+model = YOLO("yolov8m.pt")  # (n: nano, s: small, m: medium)
+model.verbose = False
+logging.getLogger("ultralytics").setLevel(logging.ERROR)
 
-def detect_blur(image_path, threshold=THRESHOLD):
-    image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
-    laplacian = cv2.Laplacian(image, cv2.CV_64F).var()
+def detect_main_object(image):
+    results = model(image)
+    height, width = image.shape[:2]
+
+    center_x, center_y = width // 2, height // 2
+    min_dist, main_obj = float("inf"), None
+
+    for r in results:
+        for box in r.boxes.xyxy:  # x1, y1, x2, y2
+            x1, y1, x2, y2 = map(int, box[:4])
+            obj_center_x = (x1 + x2) // 2
+            obj_center_y = (y1 + y2) // 2
+            dist = (center_x - obj_center_x) ** 2 + (center_y - obj_center_y) ** 2
+
+            if dist < min_dist:
+                min_dist, main_obj = dist, (x1, y1, x2, y2)
+
+    return main_obj  # (x1, y1, x2, y2)
+
+def detect_blur(image, bbox, threshold=50):
+    x1, y1, x2, y2 = bbox
+    roi = image[y1:y2, x1:x2]
+    gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+    laplacian = cv2.Laplacian(gray, cv2.CV_64F).var()
     return laplacian < threshold, laplacian
 
-def move_blurred_images(src_dir, ng_dir, threshold=30):
-    os.makedirs(ng_dir, exist_ok=True)
-    image_files = glob.glob(os.path.join(src_dir, "*.png"))
+def process_directory(directory_path, ng_directory):
+    image_files = glob.glob(os.path.join(directory_path, "*.jpg"))
+    image_files += glob.glob(os.path.join(directory_path, "*.png"))
 
-    for img in image_files:
-        is_blurred, score = detect_blur(img, threshold)
-        if is_blurred:
-            print(f"NG : {img} (Score : {score:.2f} ) - Moving to {ng_dir}")
-            shutil.move(img, os.path.join(ng_dir, os.path.basename(img)))
+    if not os.path.exists(ng_directory):
+        os.makedirs(ng_directory)
+
+    for image_path in image_files:
+        image = cv2.imread(image_path)
+
+        bbox = detect_main_object(image)
+
+        if bbox:
+            is_blurred, score = detect_blur(image, bbox)
+            print(f"{image_path} : {'NG' if is_blurred else 'OK'} Score : {score:.2f}")
+
+            if is_blurred:
+                new_path = os.path.join(ng_directory, os.path.basename(image_path))
+                shutil.move(image_path, new_path)
         else:
-            print(f"OK : {img} (Score : {score:.2f} )")
+            print(f"{image_path} : Can not detect object")
 
-parser = argparse.ArgumentParser(description="Detect and move blurred images.")
-parser.add_argument("src_directory", type=str, help="Source directory containing images")
-args = parser.parse_args()
-
-src_directory = args.src_directory
-ng_directory = os.path.join(src_directory, "NG")
-
-move_blurred_images(src_directory, ng_directory)
+process_directory("test", "test/NG")
