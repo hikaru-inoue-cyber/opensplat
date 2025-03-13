@@ -1,4 +1,4 @@
-# **Helper file for 3D Gaussian Splatting**
+# **Helper files for 3D Gaussian Splatting**
 
 ## **Singularity container definition file**
 
